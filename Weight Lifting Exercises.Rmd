@@ -1,0 +1,224 @@
+---
+title: "Classifing Mistake on Weight Lifting Exercise by Random Forest"
+author: "Sergio Jr."
+date: "2020/11/07"
+output:
+  html_document: default
+  pdf_document: default
+---
+# Executive Summary 
+The human activity recognition research has traditionally focused on discriminating between different activities until the experiments namely *Weight Lifting Exercises (WLE)* performed by Velloso, E., Bulling, A., Gellersen, H., Ugulino, W. and Fuks, H. This experiments asked participants to perform activities in a collection of a correct execution and 4 specified common mistakes. Different parameters were recorded by the on-body sensor and, thus, investigate how (well) an activity was performed. The WLE dataset consist of nearly 20000 observations and each contain 160 measurements. In our project, we investigated into the WLE dataset and train the machine by random forest to predict the classes of the performance (correct or which type of common mistakes). With searching the optimal hyper parameter **mtry**, the accuracy on test data is as high as 99.06%
+
+# Citation
+This dataset is licensed under the Creative Commons (CC BY-SA)
+
+Important: you are free to use this dataset for any purpose. This dataset is licensed under the Creative Commons license (CC BY-SA). The CC BY-SA license means you can remix, tweak, and build upon this work even for commercial purposes, as long as you credit the authors of the original work and you license your new creations under the identical terms we are licensing to you. This license is often compared to "copyleft" free and open source software licenses. All new works based on this dataset will carry the same license, so any derivatives will also allow commercial use.
+
+Please, cite this paper to refer the WLE dataset
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz6Yz6dUEht
+
+# Objective and Outline of this project
+
+**The objective of the project is to train a machine to predict the manner in which the participants did the exercise. New data point will be predicted just before the end of the project.**
+
+**Outline**
+
+1)  Read, understand and clean the data
+2)  Exploratory Data Analysis (EDA)
+3)  Model Construction and Hyper Parameter tuning
+4)  Performance evaluation 
+5)  Conclusion and Further Thinking
+
+# 1. Read, understand and clean the data
+```{r}
+#download the dataset if it is not yet existed.
+Url1<- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+
+if(!file.exists("Weight Lifting Exercises_Training.csv")) {
+        download.file(Url1, "Weight Lifting Exercises_Training.csv")
+}
+df <- read.csv("Weight Lifting Exercises_Training.csv")
+
+#keep the original dataset into a new object for later purpose
+df_original <- df
+
+```
+
+The data set consist of 19622 observations and 160 variables. For each time window, 1 data point is included to summarize the statistics in that time window. **They are removed with the associated variables which storing those descriptive statistics**. Moreover, we want to train the machine to a high-level generalization which is **NO NEED** to consider the participants and **time window**. It will be much better to implement in the future for tackle the original goal. i.e. To investigate **how (well)** dose the performer automatically. We, thus, removed 7 columns which contain indicators for the observation.  After removal, 19216 observations and 53 variables left.  
+  
+This 53 variables contain 1 output variable, **classe**, which denoted the classes of the observations. **A** denoted a correct performance and **B**, **C**, **D**, **E** denoted 1 type of common mistakes.  
+The remaining 52 variables contain records from 4 different sensors(as per experiments setting), namely **belt**, **arm**, **dumbbell** and **forearm**.  
+Each sensors record 9 measurements, **roll**, **pitch**, **yaw**, **total_accel**, **gyros_x**, **gyros_y**, **gyros_z**, **accel_belt_x**, **accel_belt_y**, **accel_belt_z**, **magnet_belt_x**, **magnet_belt_y** and **magnet_belt_z** respectively. 
+
+```{r, warning=FALSE}
+
+library(dplyr)
+
+#Detect which columns are storing descriptive statistics 
+index <- grep("^kurtosis|^skewness|^max|^min|^amplitude|^var|^avg|^stddev", names(df))
+
+#Subset the data as mentioned before
+df <- df %>% 
+        filter(new_window == "no") %>%
+        select(-c(1:7, index)) 
+```
+
+The data class of output variable, **classe**, is transformed into factor as it is a categorical variables. All other variables are in either **nemeric** or **integer** class. **complete.cases**  was also used to confirm that **NO** Missing value in the dataset.  
+
+As the data contain almost 20k data, and the bar chart shown that at least 3000 data is recorded in each category in the dataset, it is large enough to sliced into 2 non-overlapped group where **train* consist of 70% of data and remaining 30% is included in the *test* set.
+```{r}
+#Transform the output variables to factor, and all others to numeric
+df$classe <- as.factor(df$classe)
+
+for (i in 1:52) {
+        if (class(df[[i]]) != "numeric"){
+                df[[i]] <- as.numeric(df[[i]])
+        }
+}
+
+# Check for missing value 
+sum(!complete.cases(df))
+
+#plot a graph to check if there any unbalancing for the output
+library(ggplot2)
+qplot(df$classe)
+
+# Data Slicing
+library(caret)
+
+set.seed(8964)
+inTrain <- createDataPartition(y = df$classe, p = 0.7, list = FALSE)
+test <- df[-inTrain,]; train <- df[inTrain,]
+
+```
+
+# 2. Exploratory Data Analysis (EDA)
+Although we have 2 non-overlapped dataset, EDA will be performed to the train set only while all transformation, if any, will be applied to all data. 
+
+```{r}
+
+library(tidyr)
+library(ggplot2)
+g <- train %>% 
+        gather(-classe, key = "var", value = "value") %>%
+        ggplot(aes(x = value, color = classe)) +
+                facet_wrap(~ var, scales = "free") +
+                geom_density() 
+g
+```
+
+Appendix I show the histogram of all variables where the colors denoting different Classes. The wired graph for **gyros_dumbbell** and **gyros_forearm** indicate potential problems in our dataset. We found that **data number 5270** causing the extreme outliner and we believed that this may appeared with some kind of accident, like the dumbbell was throwed away accidentally. Thus, we remove this data point in our training data and apply the same logic to the test set if any.
+
+An updated graph is also performed but hided, this can be reproduced by reading the original **Rmd** file.
+
+```{r}
+
+# To remove the data number 5270
+train<-train %>% filter(gyros_dumbbell_x >= -200)
+test<-test %>% filter(gyros_dumbbell_x >= -200)
+
+```
+
+```{r, include=FALSE}
+
+#desity graph
+g1 <- train %>% 
+        gather(-classe, key = "var", value = "value") %>%
+        ggplot(aes(x = value, color = classe)) +
+                facet_wrap(~ var, scales = "free") +
+                geom_density()
+g1
+#boxplot
+g2 <- train %>% 
+        gather(-classe, key = "var", value = "value") %>%
+        ggplot(aes(x = classe, y = value, color = classe)) +
+        facet_wrap(~ var, scales = "free") +
+        geom_boxplot()
+g2
+
+```
+
+The Classe Variables seem to be highly correlated to some of the variables such as the acceleration of forearm in x direction, etc. As we can expected that, correlation between some of the variables should also be highly correlated, such as measurements on dumbbell and forearm. The selected parts of correlation matrix is shown below:
+```{r}
+# construct a correlation matrix and show the correlation between first 10 variables only
+mcor <- round(cor(train[,-53]),2)
+mcor[upper.tri(mcor)] <- ""
+mcor <- as.data.frame(mcor)
+mcor[1:10, 1:10]
+```
+
+Obviously, some variables is highly correlated. For example, the correlation between **roll_belt** and **total_accel_belt** as high as 0.98 while that between **total_accel_belt** and **accel_belt_z** is almost perfect negative correlation. 
+
+# 3. Model Construction and Hyper Parameter tuning
+Our base model is to apply random forests, 1 of the most effective and popular tree-based algorithm, to train with the training set and valuate the performance with the testing set. Each decision tree in random forest randomly select subset of features and observations to grow the tree. And predict the final output by majority vote. The major reason behind using random forest as our base model are:  
+
+1. Good Performance and Generalization
+2. Automatically Features Selection
+3. No Requirement of Features Scaling 
+
+Several hyper parameters in random forest is required to set and we will search the optimal value for the one having highest impact on the model performance, namely **mtry**, by using 3-folds cross validation. To evaluate the performance of the model, we will directly employ average accuracy. 
+
+The base model will use the default parameter, **ntree = 500** and **mtry** = sqrt(number of features) = 7. 
+```{r}
+
+library(randomForest)
+set.seed(8964)
+rf_base <- randomForest(classe~., data=train, ntree = 500)
+
+predrf<-predict(rf_base, test[,-53])
+confusionMatrix(predrf, test$classe)
+```
+
+The base model show 99.06% of out-of sample accuracy. It is a heartening number but can we even perform better? Now we will apply 2-times-averaging 3-folds cross validation to find the optimal value for parameter *mtry*. 
+
+```{r}
+
+
+# Optimal HP Search
+control <- trainControl(method="repeatedcv", number=3, repeats=2, search = "grid") # 3-folds Cross validation and 2-times-averaging
+tunegrid <- expand.grid(.mtry=c(5,6,7,8,9)) 
+
+set.seed(6894)
+rd_hy1 <- train(classe~., data=train, method="rf", metric="Accuracy", tuneGrid=tunegrid, trControl=control, ntree=500)
+rd_hy1
+plot(rd_hy1)
+
+importance(rf_base)
+varImpPlot(rf_base)
+
+```
+
+As shown in the figure, *mtry* = 7 having the highest cross_validated accuracy. So we would apply the default setting as our final model. And again, the accuracy of the test set is as high as 99.06%! This is a wonderful number and is expected to have a good prediction ability to the future. Among all features, roll_belt is the highest importance followed by yaw_belt, pitch_forearm and the z direction of dumbbell magnet. 
+
+# 5. Conclusion and Further Thinking
+
+```{r, results='hide'}
+
+#download the dataset if it is not yet existed.
+Url2<- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+if(!file.exists("Weight Lifting Exercises_TestData.csv")) {
+        download.file(Url2, "Weight Lifting Exercises_TestData.csv")
+}
+dftest <- read.csv("Weight Lifting Exercises_TestData.csv")
+
+index <- grep("^kurtosis|^skewness|^max|^min|^amplitude|^var|^avg|^stddev", names(dftest))
+
+#Subset the data as mentioned before
+dftest <- dftest %>% 
+        filter(new_window == "no") %>%
+        select(-c(1:7, index)) 
+
+for (i in 1:52) {
+        if (class(dftest[[i]]) != "numeric"){
+                dftest[[i]] <- as.numeric(dftest[[i]])
+        }
+}
+
+predtest<-predict(rf_base, dftest[,-53])
+```
+
+We perform the model new data provided in Course separately and get all answer correct! Of cause, we can further improve the performance if we can fin turn other hyper parameters in the model or further apply ensembles model with other algorithm such as Logistics Regression/ support vector machine and adoptive gradient boosting together. 
